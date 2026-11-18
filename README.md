@@ -1,8 +1,10 @@
 # A-Frame VR Kit
 
-Author: **projapa** · Version: **0.2.0**
+Author: **projapa** · Version: **0.3.0**
 
-A-FrameでGLBアバターの操作・視点・アニメーション・距離判定を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
+v0.3.0をGitHubとjsDelivrで公開しています。公開済みのv0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
+
+A-FrameでGLBアバターの操作・視点・アニメーション・距離判定・すり抜け防止を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
 
 ## このリポジトリに含めるもの
 
@@ -24,7 +26,7 @@ A-Frameを先に読み込み、その後にvr-kit.jsを読み込みます。
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.2.0/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
 ```
 
 一人で使う場合は`vr-kit.js`だけで動きます。共有するときは、下記「共有空間への接続」の順序で`vr-shared.js`も読み込みます。
@@ -35,7 +37,7 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.2.0/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
 
 <a-scene>
   <a-sky color="lightblue"></a-sky>
@@ -58,6 +60,11 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 | `view` | `third` | `first`は一人称、`third`は三人称。省略すると三人称 |
 | `enabled` | `true` | `false`でキー移動・旋回・ドラッグを止める。再開時はキーを押し直す |
 | `moveSpeed` | `1` | 移動速度の倍率。2で従来の2倍、0.5で半分、0で移動停止。旋回速度とは別 |
+| `collisionRadius` | `0.35` | solidに対する本人の半径（m）。GLBや親のscaleには連動しない |
+| `stepHeight` | `0.25` | walkableで上り下りできる高さの差（m） |
+| `maxSlope` | `45` | walkableで登れる傾斜の上限（度） |
+| `groundOffset` | `0` | 地面から足元の高さ補正（m） |
+| `idleWhenBlocked` | `false` | solidに押し当てて停止中もwalkを維持。trueならidleへ戻す |
 | `avatarDirection` | `0` | GLB固有の前向きの補正角度。カメラや通信する体の向きには加えない |
 | `faceMovement` | `true` | カメラ追従なしの三人称で、体を移動方向へ向けるか |
 | `cameraFollow` | `false` | 三人称で体の背中へ追従するか。一人称では値にかかわらず体の向きで見る |
@@ -90,6 +97,59 @@ playerAvatar.setAttribute("avatar", {
 
 一人称では三人称用の設定を変えても視点は動かず、三人称へ戻したときに反映されます。`view`の切り替えでは足元の位置と体の向きを保ちます。HUDの表示・ボタンの処理は自動生成しません。
 
+## 移動とキー入力の判定（0.3.0）
+
+```javascript
+if (isMoving(playerAvatar)) {
+  // 実際に移動中。
+}
+if (!isMoving(playerAvatar)) {
+  // 停止中。isIdleという別の関数は不要。
+}
+if (!isMoveKeyPressed(playerAvatar)) {
+  // WASD・矢印キーを1つも押していない。
+}
+```
+
+どちらも`avatar`を付けた操作対象のA-Frame要素を渡し、true／falseを返します。
+
+| 状態 | isMoving | isMoveKeyPressed |
+| --- | --- | --- |
+| 前進・後退・左右移動 | true | true |
+| solidに押し当てて足踏み | false | true |
+| その場でキー旋回 | false | true |
+| 速度0、または反対方向のキーを同時押し | false | true |
+| キーを離して停止 | false | false |
+
+`isMoving(element)`は、衝突処理後の足元のワールド座標を毎フレーム比較し、速度が0.05m/秒を超えた場合にtrueです。カメラやGLBの見た目のアニメーションでは判定しません。同じフレームなら繰り返し呼んでも同じ状態を読めます。移動開始・停止は次のフレームで反映し、リセットによる移動はカウントしません。
+
+`isMoveKeyPressed(element)`はW/A/S/D・上下左右の矢印キーのどれかが押されていればtrueです。旋回・solidでの停止・速度0・反対キー同時押しも含みます。`avatar.enabled: false`ではfalseです。マウスドラッグは含みません。
+
+未準備・対象違い・削除済み・操作対象の一時停止中は両方false。リセット・操作無効化・シーン一時停止で入力と移動状態をクリアします。配置したNPCや通信相手の一般的な移動検出用ではなく、自分が操作するavatar向けです。
+
+キーを離している間だけメーターを減らす例です。meter要素をa-sceneの外へ置きます。
+
+```html
+<meter id="chargeMeter" min="0" max="100" value="100"></meter>
+```
+
+```javascript
+let charge = 100;
+const chargeMeter = document.getElementById("chargeMeter");
+
+function updateCharge() {
+  if (!isMoveKeyPressed(playerAvatar)) {
+    charge = Math.max(0, charge - 1);
+  }
+  chargeMeter.value = charge;
+}
+
+setInterval(updateCharge, 100);
+```
+
+移動中に減らしたい場合は、条件を`isMoving(playerAvatar)`へ変えます。赤い箱の近くで停止している条件は`!isMoving(playerAvatar) && isNear(playerAvatar, box, 2)`です。チャージ量・増減・メーター更新は学生のコードで扱います。
+
+
 ## 開始位置と向きに戻す
 
 ```javascript
@@ -120,6 +180,179 @@ if (isNear(playerAvatar, item, 1)) {
 
 `isNear(first, second, distance = 2)`は、同じシーンの2要素のワールド座標での原点間距離が指定値以下なら`true`です。親の移動・回転・拡大を考慮します。無効な要素・距離は`false`です。GLBの表面の衝突判定、壁での停止、重力は含みません。非表示の要素も判定対象なので、取得済みの変数で繰り返し取得を防ぎます。
 
+## 1回だけ再生し、最後の姿勢を保つ（0.3.0）
+
+`avatar-motion`の`clip`にクリップ名を指定すると、移動によるwalk/idleの切り替えより優先して、その動きを再生します。
+
+```javascript
+wolf.setAttribute("avatar-motion", {
+    clip: "Death",
+    loop: "once",
+    clampWhenFinished: true
+});
+```
+
+このwolf.glbの倒れるクリップ名は`Death`です。任意のGLBではConsoleで実在する名前を確認してください。clipの完全一致を優先し、完全名がない場合だけ「|の後の短い名前が一意」のときに使います。
+
+| avatar-motionの設定 | 既定値 | 内容 |
+| --- | --- | --- |
+| `clip` | 空文字 | 再生するクリップ名。指定中はwalk/idleの変更やtargetの移動で上書きしない |
+| `loop` | `repeat` | repeatは繰り返し、onceは1回だけ |
+| `clampWhenFinished` | `false` | trueなら1回再生の最後の姿勢を保持。falseなら再生後に元の姿勢へ戻る |
+| `paused` | `false` | trueで現在の再生位置を一時停止。falseで同じ位置から再開 |
+
+宝箱は`Chest_Open`の先頭が閉じた状態です。pausedで先頭に待たせ、初めて近づいたら再生します。追加のchest用JSは必要ありません。
+
+```html
+<a-entity id="chest" gltf-model="chest.glb"
+  position="1.5 0 -7" scale="0.7 0.7 0.7"
+  avatar-motion="clip: Chest_Open; loop: once;
+    clampWhenFinished: true; paused: true"></a-entity>
+```
+
+```javascript
+let opened = false;
+function checkChest() {
+    if (opened === false && isNear(avatar, chest, 2)) {
+        opened = true;
+        chest.setAttribute("avatar-motion", "paused", false);
+    }
+}
+setInterval(checkChest, 100);
+```
+
+上のJavaScriptでは既存のavatarとchestの要素取得を使います。設定はavatarではなく、相手モデルのavatar-motionへ渡します。openedやfallenなどの変数で「一度反応した」ことを覚え、離れたときに元のクリップへ戻すelseは書きません。同じ設定を繰り返し渡しても再生位置は巻き戻りません。
+
+pausedの切り替えは再生位置を保ちます。clampで完了した動きをpaused falseにしただけで、先頭から再生し直すことはありません。サンプルの「最初から」は再読み込みで変数とモデルを初期化します。resetAvatarは人物の位置を戻す機能なので、宝箱の状態は初期化しません。
+
+clipを空文字にすると、従来のwalk/idle自動切り替えへ戻れます。clip/loop/clampWhenFinishedを変更したときは再生を設定し直します。clip指定中にwalk/idleだけを変えても、完了姿勢を上書きしません。
+
+再生終了時に`vr-animation-finished`イベントを1回通知します。`event.detail`のclip/state/clampedを読み、終了後の処理に使えます。通知時には最終フレームの姿勢が反映されています。ループ再生・途中でのクリップ変更では終了通知を出しません。モデルの読込・クリップ名の不備は、これまでと同様にConsoleへ案内します。
+
+通常の移動モデルは設定を追加しなければ、従来どおりwalk/idleを繰り返します。新機能でNPCの位置・向き・衝突・死亡状態を自動で同期することはありません。
+
+## solidですり抜けを防ぐ（0.3.0）
+
+
+```html
+<a-box position="0 0.5 -6" color="blue" solid></a-box>
+
+<!-- 大きさや原点に合わせて、判定する半径を調整できる。 -->
+<a-entity gltf-model="./models/wolf.glb" position="3 0 -7"
+  scale="0.45 0.45 0.45" solid="radius: 0.8"></a-entity>
+```
+
+`solid`を付けた配置アイテムは、操作中の`avatar`の進路を止めます。ロボットでもオオカミでも操作方法は同じです。後退や横への回り込みは可能です。高速移動では移動前後を結ぶ線分も調べ、途中の障害物を飛び越えないようにします。
+
+| solidのオプション | 既定値 | 内容 |
+| --- | --- | --- |
+| `radius` | `0.7` | アイテムのワールド原点を中心とした半径（m） |
+| `enabled` | `true` | falseなら通れる。実行中の変更とsolid属性の取り外しにも対応 |
+
+床面（XZ）の円同士で判定し、双方の半径を足した距離で止めます。上下の高さ・回転・メッシュの輪郭は使いません。親の移動・回転による中心位置の変化は反映しますが、半径はGLBや親のscaleに連動しないm指定です。大きな長方形の壁や立体的な地形を正確に扱う物理エンジンではありません。配置時は重ならない位置に置きます。最初から重なっている場合でも外へ出る移動は可能です。
+
+`visible: false`（親を含む）・`solid="enabled: false"`・削除したアイテムは障害物から外れます。取得で非表示にした後は通れます。自分自身やその子に付けたsolidは自分の障害物にはしません。配置した動物・独自コードで動かすNPC・通信相手同士を自動で押し戻す機能は含みません。停止位置は従来どおり共有できますが、solidの設定や状態自体を同期する機能はありません。
+
+既定では、移動キーを押して障害物で止まっている間も`walk`を続けます。キーを離すと`idle`へ戻ります。停止したらIdleにしたい場合だけ次を追加します。
+
+```html
+<a-entity gltf-model="./models/robot.glb" scale="0.3 0.3 0.3"
+  avatar="avatarDirection: 180; walk: Robot_Walking; idle: Robot_Wave;
+          idleWhenBlocked: true"></a-entity>
+```
+
+```javascript
+playerAvatar.setAttribute("avatar", "idleWhenBlocked", true);
+playerAvatar.setAttribute("avatar", "collisionRadius", 0.4);
+item.setAttribute("solid", "radius", 0.6);
+item.setAttribute("solid", "enabled", false);
+```
+
+横滑りなど実際に移動していればtrueでもwalkを再生します。旋回だけ・操作無効・速度0ではidleです。両方の半径は0以上の有限な数値で指定し、不正な値は日本語で案内して直前の有効な値を使います。
+
+`isNear()`は従来どおり**3Dの原点間距離**を返し、非表示の要素も対象にします。solidとは別の判定です。餌や取得の距離は、solidで止まる距離と原点の高さの差も考慮して設定してください。
+
+
+## 地面の範囲から出ないようにする（0.3.0）
+
+```html
+<a-plane id="field" rotation="-90 0 0" width="30" height="30"
+  color="darkseagreen" movement-area></a-plane>
+```
+
+水平なa-planeに`movement-area`を付けると、操作中のavatarがその幅・高さの範囲から出ないように止まります。プレイヤーの`collisionRadius`も考慮します。中央にある30m四方の地面と既定半径0.35mなら、足元はおよそX/Zの±14.65mまで移動できます。端に向かってキーを押し続けても進まず、端に沿った移動や内側へ戻る移動は可能です。移動前後の線分で判定するので、高速移動でも端を飛び越えません。solidの障害物と併用できます。
+
+平面や親の移動・水平回転・scale、実行中のwidth／height変更を反映します。範囲は平面に追従し、本人の半径はワールド座標のm指定のままです。判定は床面のXZ上で行い、重力・ジャンプ・斜面歩行・高さの自動補正は行いません。斜めや垂直の平面、本人が収まらない小さな平面は日本語で案内して使いません。GLBの輪郭が必ず全て地面内へ収まる判定ではありません。
+
+開始位置は範囲内に置きます。範囲を縮めるなどして既に外にいる場合、さらに外へ出る移動は止め、内側へ戻る移動は許可します。自動でテレポートはしません。
+
+| movement-areaのオプション | 既定値 | 内容 |
+| --- | --- | --- |
+| `enabled` | `true` | falseなら範囲制限を外す |
+
+```javascript
+const field = document.getElementById("field");
+field.setAttribute("movement-area", "enabled", false);
+field.setAttribute("movement-area", "enabled", true);
+field.setAttribute("width", 40);
+```
+
+非表示（親を含む）・無効化・属性を外した平面は制限から外れます。有効な範囲は1シーンで1枚です。複数ある場合は最初の有効な平面を使って案内を出します。複数の地面の結合や、離れた足場の乗り移りは扱いません。
+
+端で停止中も既定では移動入力に合わせてwalkを維持し、`idleWhenBlocked: true`でidleへ戻せます。端に押し当てている間は`isMoving(avatar)`がfalse、`isMoveKeyPressed(avatar)`がtrueです。沿って移動している間は両方trueです。対象は自分のavatarで、NPCや通信相手の移動を自動で制限しません。
+
+
+## 地面の高さに足元を合わせる（0.3.0）
+
+```html
+<a-entity gltf-model="./terrain.glb" walkable></a-entity>
+```
+
+`walkable`を地形に付けると、操作中の`avatar`が足元付近の表面を調べ、高さを合わせます。a-plane・a-boxなどの形状や、子に地面を含むa-entityにも使えます。複数の地面を指定できます。属性がなければ従来どおり水平に移動します。家具まで地面扱いしたくない場合は、床・坂だけの要素に付けてください。
+
+
+### 最初の高さ合わせは自動
+
+```html
+<a-entity gltf-model="./sabaku.glb" position="0 0 0" scale="1 1 1" walkable></a-entity>
+```
+
+`walkable`の`autoAlign`は既定でtrueです。モデルを読み込むと、avatarの**開始位置のX/Z**にある登れる面を調べ、その面が開始時の足元の高さに来るよう、地形要素をワールドの上下方向へ移動します。最初の高さ合わせはstepHeightの範囲に制限されません。大きさは学生がscaleで調整し、Y座標の数値合わせはライブラリへ任せられます。上のファイル名は授業フォルダの砂漠モデルを使う例です。
+
+- 複数の高さの面がある場合は、元の足元の高さに近い、maxSlope以内の面を選びます。屋根・床・水・茂みの意味を自動判別する処理ではありません。開始点は地面のあるX/Zに置いてください。
+- 自動で高さを合わせる主地形は1つです。複数の床や坂を一緒に動かしたい場合は、1つのa-entityへまとめてwalkableを付けます。追加のwalkable面は元の配置を保ち、通常の足元判定には使われます。
+- 通常歩行・停止・リセットでは地形を再配置しません。地形のposition・rotation・scaleやメッシュが変わると、開始位置を基準に再確認します。モデルの大きさや配置を編集中は「開始位置に戻る」で確認してください。
+- 地形が未読込、開始位置のX/Zに面がない、急斜面しかない場合は自動で横へ移動せず、移動を止めて案内します。初回後の通常歩行には従来のstepHeight・maxSlopeの制限を使います。
+
+| walkableの設定 | 既定値 | 内容 |
+| --- | --- | --- |
+| `enabled` | `true` | 地面として使うか |
+| `autoAlign` | `true` | 主地形の高さを開始時の足元へ自動で合わせるか |
+
+手で高さを指定する教材では、最初から`walkable="autoAlign: false"`を指定します。その場合は従来どおり、足元と地面をstepHeight以内に配置してください。実行中にfalseにしても、補正済みの位置を元へ戻す処理はしません。
+
+| avatarのオプション | 既定値 | 内容 |
+| --- | --- | --- |
+| `stepHeight` | `0.25` | 一度に上り下りできる高さの差（m）。0以上 |
+| `maxSlope` | `45` | 登り下りできる面の傾斜（度）。0以上90未満 |
+| `groundOffset` | `0` | 地面に対する足元の高さの補正（m）。GLBの原点に応じて調整 |
+
+```html
+<a-entity gltf-model="./man.glb" position="0 0 1" scale="0.32 0.32 0.32"
+  avatar="stepHeight: 0.25; maxSlope: 45; groundOffset: 0.01;
+    walk: HumanArmature|Man_Walk; idle: HumanArmature|Man_Idle"></a-entity>
+```
+
+モデルのファイル名・scale・位置・アニメーションは使用するGLBに合わせます。上は授業フォルダのman.glbを使う例です。`groundOffset`以外の2項目は距離・角度の上限で、人物のscaleには連動しません。3項目とも`setAttribute("avatar", "stepHeight", 0.2)`などで実行中に変更できます。不正な値は直前の有効値を使います。
+
+- 開始位置のX/Zに地面があれば、最初の高さは自動で合わせます。autoAlignをfalseにした場合だけ、開始位置の足元と地面をstepHeight以内に合わせてください。地面の読み込み前や、開始点に面がない場合は移動を止めてConsoleで案内します。
+- 緩い坂は高さに沿って移動し、小さな段差では高さを即座に合わせます。高い段差・急斜面・足元に面がない場所では止まります。落下・重力・ジャンプ・左右の足のIK・カメラの壁判定はありません。
+- 足元から近い高さだけを探すため、遠く上にある屋根へ突然上がりません。ただし、低い家具・茂み・水面もwalkableのモデルに含めれば候補になります。川を通行禁止にする機能ではありません。建物の壁や家具には別途solidを配置してください。
+- 原点にある足元1点で地面を調べます。人物の半径全体の接地保証はありません。8cm間隔で経路を確認するため、それより細い亀裂や障害物は省略される場合があります。1フレームの調査は128区間までで、それを超える移動は手前で止めます。
+- `solid`・水平な`movement-area`と併用できます。障害物と地面の端が同時に干渉する場合は、そのフレームの開始点で止めます。地形に押し当てて止まったときも、既定はWalkを維持し、`idleWhenBlocked: true`でIdleに戻ります。`isMoving`は高さを含む実移動を返します。
+- 地面・親・子のvisible、walkableのenabled、属性の削除、モデルの読み込み後のメッシュ、親の位置・回転・scaleを反映します。`walkable="enabled: false"`で一時的に対象から外せます。対象を全て外すと高さ補正と地形の端での停止を解除します。
+- 対象は`avatar`で操作する自分です。NPC・通信相手を地形へ追従させません。変形するスキンメッシュや移動する足場に乗せる用途は対象外です。重いモデルでは床・坂だけの簡単な判定用モデルを用意すると軽くできます。
+
 ## 共有空間への接続
 
 `vr-shared.js`はブラウザ側だけの機能です。使用する際は、対応したNode.js・Socket.IOサーバーを別途用意します。このリポジトリだけで共有サーバーは起動できません。
@@ -129,8 +362,8 @@ if (isNear(playerAvatar, item, 1)) {
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.2.0/vr-kit.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.2.0/vr-shared.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-shared.js"></script>
 ```
 
 ```javascript
@@ -159,8 +392,8 @@ const socket = vrConnect(playerAvatar, { room: "main" });
 
 ## バージョンと確認範囲
 
-ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.2.0`を確認できます。授業では`@v0.2.0`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
+ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.0`を確認できます。授業では`@v0.3.0`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
 
-別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこの公開候補には含めません。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
+別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこのリポジトリには含めません。solidでの停止、後退、回り込み、衝突中のWalk/IdleもChromeで確認しています。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
 
 このライブラリ本体の公開ライセンスは未設定です。
