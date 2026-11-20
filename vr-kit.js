@@ -1,8 +1,8 @@
-/* vr-kit 0.3.3：A-Frameの後に読み込む。 */
+/* vr-kit 0.3.4：A-Frameの後に読み込む。 */
 if (typeof AFRAME === 'undefined') {
   throw new Error('[vr-kit] A-Frameが見つかりません。aframe.min.jsをvr-kit.jsより先に読み込んでください。');
 }
-const VR_KIT_VERSION = '0.3.3';
+const VR_KIT_VERSION = '0.3.4';
 
 /* 2つのA-Frame要素の位置が、指定距離以内ならtrueを返す（単位：m）。 */
 function isNear(first, second, distance = 2) {
@@ -617,7 +617,7 @@ AFRAME.registerComponent('walkable', {
   remove: function remove() { this.surfaces.delete(this); }
 });
 
-/* NPCの原点を、指定した地形の高さに合わせる。Yの手書きと読込待ちは不要。 */
+/* 指定した地形を高さ0とし、positionのYを地面からの高さ（m）として使う。 */
 AFRAME.registerComponent('ground', {
   // 文字列で保持するので、地形要素を後から追加した場合も見つけられる。
   schema: { type: 'string', default: '' },
@@ -631,6 +631,38 @@ AFRAME.registerComponent('ground', {
     this.hideMesh();
   },
   update: function update() { this.key = null; },
+  play: function play() {
+    // A-FrameはDOMの親を変えるとremove後に同じインスタンスを再利用する。
+    this.el.addEventListener('object3dset', this.modelChanged);
+    this.key = null;
+  },
+  mountAnchor: function mountAnchor() {
+    const object = this.el.object3D;
+    if (this.anchor && object.parent === this.anchor) return this.anchor.parent;
+    this.anchor?.parent?.remove(this.anchor);
+    const parent = object.parent;
+    if (!parent) return null;
+    // positionを接地後の値で書き換えない。外側のグループだけで地面の高さを補う。
+    this.anchor = new THREE.Group();
+    this.anchor.name = 'vr-ground-anchor';
+    parent.add(this.anchor);
+    this.anchor.add(object);
+    this.key = null;
+    return parent;
+  },
+  unmountAnchor: function unmountAnchor(preservePosition) {
+    const object = this.el.object3D, parent = this.anchor?.parent;
+    if (parent && object.parent === this.anchor) {
+      if (preservePosition) object.getWorldPosition(this.point);
+      parent.add(object);
+      if (preservePosition) {
+        parent.worldToLocal(this.point);
+        this.el.setAttribute('position', { x: this.point.x, y: this.point.y, z: this.point.z });
+      }
+    }
+    parent?.remove(this.anchor);
+    this.anchor = null;
+  },
   hideMesh: function hideMesh() {
     this.ready = false;
     const mesh = this.el.getObject3D('mesh');
@@ -654,7 +686,9 @@ AFRAME.registerComponent('ground', {
   tick: function tick(time = performance.now()) {
     const scene = this.el.sceneEl;
     // 操作キャラには既存のwalkable処理がある。モデルだけを動かしてリグとずらさない。
-    if (this.el.hasAttribute('avatar')) { this.restoreMesh(); this.ready = true; return; }
+    if (this.el.hasAttribute('avatar')) {
+      this.unmountAnchor(true); this.restoreMesh(); this.ready = true; return;
+    }
     let surface = null;
     try { if (this.data) surface = scene.querySelector(this.data); } catch (_) { /* 無効な指定も待機扱い。 */ }
     if (surface !== this.surface) this.setSurface(surface);
@@ -667,21 +701,24 @@ AFRAME.registerComponent('ground', {
     if (avatar && !avatar.components.avatar?.controls) {
       this.hideMesh(); return;
     }
+    const parent = this.mountAnchor();
+    if (!parent) { this.hideMesh(); return; }
     surface.object3D.updateWorldMatrix(true, false);
-    this.el.object3D.getWorldPosition(this.point);
+    parent.updateWorldMatrix(true, false);
+    const position = this.el.object3D.position;
+    // X/Zは親からの配置、Yだけはワールドの地面からのm。親やモデルのscaleに連動しない。
+    this.point.set(position.x, 0, position.z).applyMatrix4(parent.matrixWorld);
     const keyFor = () => this.revision + '|' + surface.object3D.matrixWorld.elements.join(',') +
-      '|' + [this.point.x, this.point.y, this.point.z].map(value => value.toPrecision(12)).join(',');
+      '|' + parent.matrixWorld.elements.join(',') + '|' + [position.x, position.y, position.z].join(',');
     const key = keyFor();
     // visibleなど通知されない変更も拾う。静止中の全メッシュ判定は毎フレーム行わない。
     if (key === this.key && time - this.checkedAt < 250) return;
     this.checkedAt = time;
     const y = getGroundHeight(surface, this.point.x, this.point.z);
     if (y === null) { this.key = key; this.hideMesh(); return; }
-    this.point.y = y;
-    const worldPoint = this.point.clone();
-    if (this.el.object3D.parent) this.el.object3D.parent.worldToLocal(this.point);
-    this.el.setAttribute('position', { x: this.point.x, y: this.point.y, z: this.point.z });
-    this.point.copy(worldPoint);
+    this.point.y = y + position.y;
+    parent.worldToLocal(this.point);
+    this.anchor.position.copy(this.point).sub(position);
     this.key = keyFor();
     // elementのvisibleは変更しない。取得済み・作者が非表示にしたモデルは再表示しない。
     this.restoreMesh();
@@ -690,7 +727,14 @@ AFRAME.registerComponent('ground', {
   remove: function remove() {
     this.setSurface(null);
     this.el.removeEventListener('object3dset', this.modelChanged);
+    // ground属性だけを外したときは見た目の位置を保つ。DOMの移動では相対Yを保つ。
+    let attached = this.el.isConnected;
+    for (let el = this.el; el && !el.isScene; el = el.parentEl) {
+      if (el.parentNode !== el.parentEl) { attached = false; break; }
+    }
+    this.unmountAnchor(attached);
     this.restoreMesh();
+    this.ready = false;
   }
 });
 
