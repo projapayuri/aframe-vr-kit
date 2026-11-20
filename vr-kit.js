@@ -1,8 +1,8 @@
-/* vr-kit 0.3.1：A-Frameの後に読み込む。 */
+/* vr-kit 0.3.2：A-Frameの後に読み込む。 */
 if (typeof AFRAME === 'undefined') {
   throw new Error('[vr-kit] A-Frameが見つかりません。aframe.min.jsをvr-kit.jsより先に読み込んでください。');
 }
-const VR_KIT_VERSION = '0.3.1';
+const VR_KIT_VERSION = '0.3.2';
 
 /* 2つのA-Frame要素の位置が、指定距離以内ならtrueを返す（単位：m）。 */
 function isNear(first, second, distance = 2) {
@@ -19,10 +19,15 @@ function isNear(first, second, distance = 2) {
 }
 
 /* 指定した地形のX/Zにある表面の高さ（ワールドY）。着地できる面がなければnull。 */
-function getGroundHeight(ground, x, z, maxSlope = 45) {
+function getGroundHeight(ground, x, z, options = 45) {
+  const settings = options && typeof options === 'object' && !Array.isArray(options) ? options : null;
+  const from = settings?.from;
+  const fromAvatar = from?.components?.avatar;
+  const maxSlope = settings ? settings.maxSlope ?? fromAvatar?.data.maxSlope ?? 45 : options;
   if (!ground?.isConnected || !ground.sceneEl || !ground.object3D?.isObject3D ||
       !Number.isFinite(x) || !Number.isFinite(z) ||
       !Number.isFinite(maxSlope) || maxSlope < 0 || maxSlope >= 90) return null;
+  if (from !== undefined && (!from?.isConnected || !from.object3D?.isObject3D || from.sceneEl !== ground.sceneEl)) return null;
 
   function active(object) {
     for (let parent = object; parent; parent = parent.parent) {
@@ -66,7 +71,99 @@ function getGroundHeight(ground, x, z, maxSlope = 45) {
   const normal = hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(matrix));
   // 最上面が急斜面なら、その下の床へ潜り込む候補を返さない。
   if (normal.y + 1e-7 < Math.cos(THREE.MathUtils.degToRad(maxSlope))) return null;
+
+  if (from !== undefined) {
+    const components = vrGroundConnections(ground.object3D, meshes, maxSlope, bounds);
+    const faceKey = value => value.object.uuid + ':' + (value.instanceId ?? -1) + ':' + value.faceIndex;
+    const destination = components.get(faceKey(hit));
+    if (destination === undefined) return null;
+    const foot = from.object3D.getWorldPosition(new THREE.Vector3());
+    const offset = fromAvatar?.data.groundOffset ?? 0;
+    const step = fromAvatar?.data.stepHeight ?? 0.25;
+    ray.set(new THREE.Vector3(foot.x, bounds.max.y + margin, foot.z), new THREE.Vector3(0, -1, 0));
+    let start, nearest = Infinity;
+    for (const value of ray.intersectObjects(meshes, false)) {
+      const component = components.get(faceKey(value));
+      if (component === undefined) continue;
+      const difference = Math.abs(value.point.y - (foot.y - offset));
+      if (difference < nearest) { start = component; nearest = difference; }
+    }
+    // 上に屋根があっても、足元に近い面を出発面にする。
+    if (nearest > step + 0.001 || start !== destination) return null;
+  }
   return hit.point.y;
+}
+
+/* 足元と同じ、辺でつながる緩い面だけを候補にする。モデル名や固定のYには依存しない。 */
+const vrGroundConnectionCache = new WeakMap();
+function vrGroundConnections(root, meshes, maxSlope, bounds) {
+  const records = meshes.map(mesh => ({
+    mesh, geometry: mesh.geometry, position: mesh.geometry.attributes.position, index: mesh.geometry.index,
+    positionVersion: mesh.geometry.attributes.position?.version,
+    indexVersion: mesh.geometry.index?.version,
+    transform: mesh.matrixWorld.elements.join(','),
+    draw: mesh.geometry.drawRange.start + ':' + mesh.geometry.drawRange.count,
+    groups: mesh.geometry.groups.map(g => g.start + ':' + g.count + ':' + g.materialIndex).join(','),
+    material: Array.isArray(mesh.material) ? mesh.material.map(m => m?.uuid || '').join(',') : mesh.material?.uuid,
+    instances: mesh.isInstancedMesh ? mesh.count + ':' + mesh.instanceMatrix.array.toString() : ''
+  }));
+  const cached = vrGroundConnectionCache.get(root);
+  if (cached && cached.maxSlope === maxSlope && cached.records.length === records.length &&
+      records.every((record, i) => Object.keys(record).every(key => record[key] === cached.records[i][key]))) return cached.components;
+
+  const parents = [], ranks = [], faces = [], edges = new Map();
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const u = new THREE.Vector3(), v = new THREE.Vector3(), normal = new THREE.Vector3();
+  const epsilon = Math.max(0.000001, bounds.getSize(new THREE.Vector3()).length() * 0.0000001);
+  const minimumY = Math.cos(THREE.MathUtils.degToRad(maxSlope));
+  function find(id) {
+    while (parents[id] !== id) { parents[id] = parents[parents[id]]; id = parents[id]; }
+    return id;
+  }
+  function join(first, second) {
+    first = find(first); second = find(second);
+    if (first === second) return;
+    if (ranks[first] < ranks[second]) [first, second] = [second, first];
+    parents[second] = first;
+    if (ranks[first] === ranks[second]) ranks[first]++;
+  }
+  const vertexKey = point => [point.x, point.y, point.z].map(value => Math.round(value / epsilon)).join(',');
+  for (const mesh of meshes) {
+    const geometry = mesh.geometry, position = geometry.attributes.position, index = geometry.index;
+    if (!position) continue;
+    const count = index ? index.count : position.count;
+    const first = Math.max(0, geometry.drawRange.start);
+    const last = Math.min(count, first + geometry.drawRange.count);
+    for (let instance = 0; instance < (mesh.isInstancedMesh ? mesh.count : 1); instance++) {
+      const matrix = mesh.matrixWorld.clone();
+      if (mesh.isInstancedMesh) {
+        const instanceMatrix = new THREE.Matrix4();
+        mesh.getMatrixAt(instance, instanceMatrix); matrix.multiply(instanceMatrix);
+      }
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
+      for (let offset = first; offset + 2 < last; offset += 3) {
+        if (Array.isArray(mesh.material) && !geometry.groups.some(g => offset >= g.start && offset + 2 < g.start + g.count && mesh.material[g.materialIndex])) continue;
+        a.fromBufferAttribute(position, index ? index.getX(offset) : offset);
+        b.fromBufferAttribute(position, index ? index.getX(offset + 1) : offset + 1);
+        c.fromBufferAttribute(position, index ? index.getX(offset + 2) : offset + 2);
+        normal.crossVectors(u.subVectors(b, a), v.subVectors(c, a)).applyNormalMatrix(normalMatrix);
+        if (normal.y + 1e-7 < minimumY) continue;
+        a.applyMatrix4(matrix); b.applyMatrix4(matrix); c.applyMatrix4(matrix);
+        const vertices = [vertexKey(a), vertexKey(b), vertexKey(c)];
+        const id = parents.length;
+        parents.push(id); ranks.push(0);
+        faces.push(mesh.uuid + ':' + (mesh.isInstancedMesh ? instance : -1) + ':' + Math.floor(offset / 3));
+        for (let j = 0; j < 3; j++) {
+          const pair = [vertices[j], vertices[(j + 1) % 3]].sort().join('|');
+          if (edges.has(pair)) join(id, edges.get(pair));
+          else edges.set(pair, id);
+        }
+      }
+    }
+  }
+  const components = new Map(faces.map((key, id) => [key, find(id)]));
+  vrGroundConnectionCache.set(root, { records, maxSlope, components });
+  return components;
 }
 
 /* 操作中のavatarが、実際に移動しているか。呼び出しは記録を変更しない。 */

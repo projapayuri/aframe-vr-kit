@@ -1,8 +1,8 @@
 # A-Frame VR Kit
 
-Author: **projapa** · Version: **0.3.1**
+Author: **projapa** · Version: **0.3.2**
 
-v0.3.1をGitHubとjsDelivrで公開しています。公開済みのv0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
+v0.3.2をGitHubとjsDelivrで公開しています。公開済みのv0.3.1・v0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
 
 A-FrameでGLBアバターの操作・視点・アニメーション・距離判定・すり抜け防止を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
 
@@ -26,7 +26,7 @@ A-Frameを先に読み込み、その後にvr-kit.jsを読み込みます。
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
 ```
 
 一人で使う場合は`vr-kit.js`だけで動きます。共有するときは、下記「共有空間への接続」の順序で`vr-shared.js`も読み込みます。
@@ -37,7 +37,7 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
 
 <a-scene>
   <a-sky color="lightblue"></a-sky>
@@ -359,7 +359,7 @@ field.setAttribute("width", 40);
 const map = document.getElementById("map");
 const x = Math.random() * 20 - 10;
 const z = Math.random() * 10 - 20;
-const y = getGroundHeight(map, x, z);
+const y = getGroundHeight(map, x, z, { from: avatar });
 
 if (y !== null) {
   const controls = avatar.components.avatar.controls;
@@ -379,6 +379,23 @@ if (y !== null) {
 
 ランダムワープでは、演出を始める前にX・Z・Yを決めます。`y === null`なら今回は処理を始めず、次の判定で選び直します。モデルを沈める演出は、着地できる候補が見つかった後に始めます。
 
+### 足元とつながる面に限定する（0.3.2）
+
+```javascript
+const y = getGroundHeight(map, x, z, { from: avatar });
+if (y === null) return;
+```
+
+`from`へ足元を基準にする要素を渡すと、その要素が立っている面と**辺でつながる、傾斜上限内の面**だけを候補にします。Y=0などの固定値やモデル名には依存しません。1つのメッシュに地面・サボテン・建物がまとめられたGLBでも、立っている床と独立した上面なら除外します。候補地点の上に独立したサボテンや屋根がある場合は、その下へ潜らせずnullを返します。
+
+- `{ from: avatar }`ではavatarのmaxSlopeとgroundOffsetを参照します。明示する場合は`{ from: avatar, maxSlope: 30 }`の形です。従来の第4引数に数値を渡す書き方も使えます。
+- 出発点の真上に屋根があっても、足元に近い面を基準にします。足元に面が見つからない場合、fromが削除済み・別のシーンの場合はnullです。
+- 共有辺の頂点座標を使うため、UVなどで頂点が分かれた継ぎ目や、同じ辺で接する別メッシュも扱います。形状・配置・表示が変わると接続を再計算します。
+- これは「砂」「サボテン」といった意味を識別する機能や経路探索ではありません。坂でつながる屋根は候補になり、別パーツの階段・離れた床・途中に隙間のある面は候補から外れることがあります。そうした場所へもワープしたい教材では、着地用の面や地点を別途指定してください。
+- アバターの半径や他のsolidとの重なりは判定しません。床と障害物が同じ連続した緩い形状なら、その部分まで区別できません。
+
+ランダムワープでは`from`付きで候補を調べ、nullなら次の判定で選び直します。特定モデルに合わせた`y > 0`などの条件は不要です。
+
 ## 共有空間への接続
 
 `vr-shared.js`はブラウザ側だけの機能です。使用する際は、対応したNode.js・Socket.IOサーバーを別途用意します。このリポジトリだけで共有サーバーは起動できません。
@@ -388,8 +405,8 @@ if (y !== null) {
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-shared.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-shared.js"></script>
 ```
 
 ```javascript
@@ -418,7 +435,7 @@ const socket = vrConnect(playerAvatar, { room: "main" });
 
 ## バージョンと確認範囲
 
-ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.1`を確認できます。授業では`@v0.3.1`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
+ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.2`を確認できます。授業では`@v0.3.2`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
 
 別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこのリポジトリには含めません。solidでの停止、後退、回り込み、衝突中のWalk/IdleもChromeで確認しています。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
 
