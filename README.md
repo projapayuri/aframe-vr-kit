@@ -1,8 +1,8 @@
 # A-Frame VR Kit
 
-Author: **projapa** · Version: **0.3.4**
+Author: **projapa** · Version: **0.3.5**
 
-v0.3.4をGitHubとjsDelivrで公開しています。公開済みのv0.3.3・v0.3.2・v0.3.1・v0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
+v0.3.5をGitHubとjsDelivrで公開しています。公開済みのv0.3.4・v0.3.3・v0.3.2・v0.3.1・v0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
 
 A-FrameでGLBアバターの操作・視点・アニメーション・距離判定・すり抜け防止を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
 
@@ -26,7 +26,7 @@ A-Frameを先に読み込み、その後にvr-kit.jsを読み込みます。
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.4/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.5/vr-kit.js"></script>
 ```
 
 一人で使う場合は`vr-kit.js`だけで動きます。共有するときは、下記「共有空間への接続」の順序で`vr-shared.js`も読み込みます。
@@ -37,7 +37,7 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.4/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.5/vr-kit.js"></script>
 
 <a-scene>
   <a-sky color="lightblue"></a-sky>
@@ -237,19 +237,23 @@ clipを空文字にすると、従来のwalk/idle自動切り替えへ戻れま�
 ```html
 <a-box position="0 0.5 -6" color="blue" solid></a-box>
 
-<!-- 大きさや原点に合わせて、判定する半径を調整できる。 -->
+<!-- GLBもsolidだけで、大きさとscaleに判定が追従する。 -->
 <a-entity gltf-model="./models/wolf.glb" position="3 0 -7"
-  scale="0.45 0.45 0.45" solid="radius: 0.8"></a-entity>
+  scale="0.45 0.45 0.45" solid></a-entity>
 ```
 
 `solid`を付けた配置アイテムは、操作中の`avatar`の進路を止めます。ロボットでもオオカミでも操作方法は同じです。後退や横への回り込みは可能です。高速移動では移動前後を結ぶ線分も調べ、途中の障害物を飛び越えないようにします。
 
 | solidのオプション | 既定値 | 内容 |
 | --- | --- | --- |
-| `radius` | `0.7` | アイテムのワールド原点を中心とした半径（m） |
+| `radius` | 省略で自動 | 明示したときだけ手動の円（原点中心、ワールドm）。通常は指定不要 |
 | `enabled` | `true` | falseなら通れる。実行中の変更とsolid属性の取り外しにも対応 |
 
-床面（XZ）の円同士で判定し、双方の半径を足した距離で止めます。上下の高さ・回転・メッシュの輪郭は使いません。親の移動・回転による中心位置の変化は反映しますが、半径はGLBや親のscaleに連動しないm指定です。大きな長方形の壁や立体的な地形を正確に扱う物理エンジンではありません。配置時は重ならない位置に置きます。最初から重なっている場合でも外へ出る移動は可能です。
+v0.3.5から、`solid`だけなら表示中のモデルを囲む箱を自動取得し、そのXZ範囲で止めます。GLBの元の大きさ・原点のずれ・position・rotation・scale・親の変換・子メッシュの配置を反映します。実行中のscaleやモデルの変更にも追従するので、大きさを変えるたびに半径を指定し直す必要はありません。`ground`との併用も可能です。未読込やメッシュなしの間は、自動判定を待ちます。
+
+これはワールドのX/Z軸に平行な外枠（AABB）の簡易判定です。回転した物は外枠が広がり、空洞・入口・屋根の下の空間も箱の内側として扱います。アバターの半径ぶん外側で止め、角にも少し余裕を持たせます。上下の高さで通り抜けを区別する物理判定ではありません。マップ全体にsolidを付けると空き地も含む外枠が1つの障害物になるため、建物や動物など個別に配置した物に付けます。動物のスキンアニメーションは、最初の姿勢の外枠を基準にして、歩行ごとに判定が揺れないようにします。モデルや親のscaleはその後も反映します。
+
+手動の円が必要な場合だけ、従来どおり`solid="radius: 0.8"`を指定できます。この指定はワールドのmで固定する上書きで、scaleに連動しません。`item.removeAttribute("solid", "radius")`で自動へ戻せます。配置時は重ならない位置に置きます。最初から重なっている場合でも近い外側へ出る移動は可能です。
 
 `visible: false`（親を含む）・`solid="enabled: false"`・削除したアイテムは障害物から外れます。取得で非表示にした後は通れます。自分自身やその子に付けたsolidは自分の障害物にはしません。配置した動物・独自コードで動かすNPC・通信相手同士を自動で押し戻す機能は含みません。停止位置は従来どおり共有できますが、solidの設定や状態自体を同期する機能はありません。
 
@@ -433,8 +437,8 @@ if (y === null) return;
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.4/vr-kit.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.4/vr-shared.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.5/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.5/vr-shared.js"></script>
 ```
 
 ```javascript
@@ -463,7 +467,7 @@ const socket = vrConnect(playerAvatar, { room: "main" });
 
 ## バージョンと確認範囲
 
-ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.4`を確認できます。授業では`@v0.3.4`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
+ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.5`を確認できます。授業では`@v0.3.5`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
 
 別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこのリポジトリには含めません。solidでの停止、後退、回り込み、衝突中のWalk/IdleもChromeで確認しています。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
 

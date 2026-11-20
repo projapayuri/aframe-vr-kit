@@ -1,8 +1,8 @@
-/* vr-kit 0.3.4：A-Frameの後に読み込む。 */
+/* vr-kit 0.3.5：A-Frameの後に読み込む。 */
 if (typeof AFRAME === 'undefined') {
   throw new Error('[vr-kit] A-Frameが見つかりません。aframe.min.jsをvr-kit.jsより先に読み込んでください。');
 }
-const VR_KIT_VERSION = '0.3.4';
+const VR_KIT_VERSION = '0.3.5';
 
 /* 2つのA-Frame要素の位置が、指定距離以内ならtrueを返す（単位：m）。 */
 function isNear(first, second, distance = 2) {
@@ -595,7 +595,7 @@ AFRAME.registerComponent('avatar-motion', {
   }
 });
 
-/* 固いアイテム。半径は見た目のscaleに連動しない、ワールド座標でのm。 */
+/* 固いアイテム。通常はモデルの大きさを自動取得し、radius指定時だけ手動の円を使う。 */
 const vrSolidItems = new WeakMap();
 const vrMovementAreas = new WeakMap();
 const vrWalkableSurfaces = new WeakMap();
@@ -926,6 +926,9 @@ AFRAME.registerComponent('solid', {
   },
   init: function init() {
     this.radius = 0.7;
+    this.bounds = new THREE.Box3();
+    this.meshBounds = new THREE.Box3();
+    this.center = new THREE.Vector3();
     this.items = vrSolidItems.get(this.el.sceneEl);
     if (!this.items) {
       this.items = new Set();
@@ -933,12 +936,77 @@ AFRAME.registerComponent('solid', {
     }
     this.items.add(this);
   },
+  play: function play() { this.items.add(this); },
   update: function update() {
     if (Number.isFinite(this.data.radius) && this.data.radius >= 0) this.radius = this.data.radius;
     else console.warn('[vr-kit] solidのradiusは0以上の半径（m）で指定してください。直前の有効な値を使います。');
   },
+  getCollider: function getCollider() {
+    const object = this.el.object3D;
+    // radiusの明示指定は、従来どおりワールド座標のmによる手動の円。
+    if (this.el.getDOMAttribute('solid')?.radius !== undefined) {
+      object.getWorldPosition(this.center);
+      return { x: this.center.x, z: this.center.z, radius: this.radius };
+    }
+    object.updateWorldMatrix(true, true);
+    this.bounds.makeEmpty();
+    object.traverse(mesh => {
+      if (!mesh.isMesh || !mesh.geometry) return;
+      for (let parent = mesh; parent; parent = parent.parent) {
+        if (!parent.visible) return;
+        if (parent === object) break;
+      }
+      let box;
+      if (mesh.isInstancedMesh) {
+        mesh.computeBoundingBox(); box = mesh.boundingBox;
+      } else if (mesh.isSkinnedMesh && mesh.computeBoundingBox) {
+        // アニメーションごとに判定が揺れないよう、最初の姿勢の外枠を使う。
+        if (!mesh.boundingBox) mesh.computeBoundingBox();
+        box = mesh.boundingBox;
+      } else {
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        box = mesh.geometry.boundingBox;
+      }
+      if (box) this.bounds.union(this.meshBounds.copy(box).applyMatrix4(mesh.matrixWorld));
+    });
+    const b = this.bounds;
+    if (b.isEmpty() || ![b.min.x, b.max.x, b.min.z, b.max.z].every(Number.isFinite) ||
+        (b.max.x - b.min.x < 1e-10 && b.max.z - b.min.z < 1e-10)) return null;
+    return { minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z };
+  },
   remove: function remove() { this.items.delete(this); }
 });
+
+/* プレイヤーの半径を足した箱と移動線分の最初の接点。角は少し余裕を持って止める。 */
+function vrSolidBoxHit(x, z, dx, dz, box) {
+  if (x >= box.minX && x <= box.maxX && z >= box.minZ && z <= box.maxZ) {
+    // 最初から重なっていても、最も近い外側へ抜ける移動を許可する。
+    const faces = [
+      { gap: x - box.minX, nx: -1, nz: 0 }, { gap: box.maxX - x, nx: 1, nz: 0 },
+      { gap: z - box.minZ, nx: 0, nz: -1 }, { gap: box.maxZ - z, nx: 0, nz: 1 }
+    ];
+    const nearest = Math.min(...faces.map(face => face.gap));
+    const face = faces.filter(face => face.gap <= nearest + 1e-8)
+      .sort((a, b) => (dx * b.nx + dz * b.nz) - (dx * a.nx + dz * a.nz))[0];
+    return dx * face.nx + dz * face.nz >= -1e-12 ? null : { contact: 0, nx: face.nx, nz: face.nz };
+  }
+  let enter = -Infinity, leave = Infinity, nx = 0, nz = 0;
+  for (const [position, movement, low, high, axis] of [
+    [x, dx, box.minX, box.maxX, 'x'], [z, dz, box.minZ, box.maxZ, 'z']
+  ]) {
+    if (Math.abs(movement) < 1e-12) {
+      if (position < low || position > high) return null;
+      continue;
+    }
+    let first = (low - position) / movement, last = (high - position) / movement;
+    const normal = movement > 0 ? -1 : 1;
+    if (first > last) [first, last] = [last, first];
+    if (first > enter) { enter = first; nx = axis === 'x' ? normal : 0; nz = axis === 'z' ? normal : 0; }
+    leave = Math.min(leave, last);
+    if (enter > leave) return null;
+  }
+  return enter >= 0 && enter <= 1 && leave >= 0 ? { contact: enter, nx, nz } : null;
+}
 
 /* 水平な平面を、本人が出られない範囲にする。重力や高さの補正は行わない。 */
 AFRAME.registerComponent('movement-area', {
@@ -1034,9 +1102,16 @@ AFRAME.registerComponent('vr-solid-controls', {
         if (parent === object) own = true;
       }
       if (!visible || own) continue;
-      object.getWorldPosition(this.center);
-      if (!Number.isFinite(this.center.x) || !Number.isFinite(this.center.z)) continue;
-      obstacles.push({ x: this.center.x, z: this.center.z, radius: item.radius + this.data.radius + 0.0001 });
+      const collider = item.getCollider();
+      if (!collider) continue;
+      const margin = this.data.radius + 0.0001;
+      if (collider.radius !== undefined) {
+        if (!Number.isFinite(collider.x) || !Number.isFinite(collider.z)) continue;
+        obstacles.push({ ...collider, radius: collider.radius + margin });
+      } else {
+        obstacles.push({ minX: collider.minX - margin, maxX: collider.maxX + margin,
+          minZ: collider.minZ - margin, maxZ: collider.maxZ + margin });
+      }
     }
     let bounds = null;
     for (const area of vrMovementAreas.get(this.el.sceneEl) || []) {
@@ -1049,13 +1124,18 @@ AFRAME.registerComponent('vr-solid-controls', {
       if (bounds) { area.warn('有効な移動範囲は1枚で使ってください。最初の有効な平面を使います。'); continue; }
       bounds = area.getBounds(this.data.radius + 0.0001);
     }
-    // 線分と円の最初の接点を探すので、高速移動でも向こう側へ抜けない。
+    // 線分と箱・円の最初の接点を探すので、高速移動でも向こう側へ抜けない。
     // 接点からは内向きの移動だけ除き、斜め入力なら外周に沿って動ける。
     const normals = [];
     for (let attempt = 0; attempt < 6 && dx * dx + dz * dz > 1e-16; attempt++) {
       let hit = null, fraction = 1;
       const lengthSquared = dx * dx + dz * dz;
       for (const obstacle of obstacles) {
+        if (obstacle.radius === undefined) {
+          const hitBox = vrSolidBoxHit(x, z, dx, dz, obstacle);
+          if (hitBox && hitBox.contact <= fraction) { fraction = hitBox.contact; hit = hitBox; }
+          continue;
+        }
         const ox = x - obstacle.x, oz = z - obstacle.z;
         const approach = ox * dx + oz * dz;
         if (approach >= 0) continue; // 最初から重なっていても、外へは出られる。
