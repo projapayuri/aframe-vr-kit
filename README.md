@@ -1,8 +1,8 @@
 # A-Frame VR Kit
 
-Author: **projapa** · Version: **0.3.0**
+Author: **projapa** · Version: **0.3.1**
 
-v0.3.0をGitHubとjsDelivrで公開しています。公開済みのv0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
+v0.3.1をGitHubとjsDelivrで公開しています。公開済みのv0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
 
 A-FrameでGLBアバターの操作・視点・アニメーション・距離判定・すり抜け防止を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
 
@@ -26,7 +26,7 @@ A-Frameを先に読み込み、その後にvr-kit.jsを読み込みます。
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
 ```
 
 一人で使う場合は`vr-kit.js`だけで動きます。共有するときは、下記「共有空間への接続」の順序で`vr-shared.js`も読み込みます。
@@ -37,7 +37,7 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
 
 <a-scene>
   <a-sky color="lightblue"></a-sky>
@@ -353,6 +353,32 @@ field.setAttribute("width", 40);
 - 地面・親・子のvisible、walkableのenabled、属性の削除、モデルの読み込み後のメッシュ、親の位置・回転・scaleを反映します。`walkable="enabled: false"`で一時的に対象から外せます。対象を全て外すと高さ補正と地形の端での停止を解除します。
 - 対象は`avatar`で操作する自分です。NPC・通信相手を地形へ追従させません。変形するスキンメッシュや移動する足場に乗せる用途は対象外です。重いモデルでは床・坂だけの簡単な判定用モデルを用意すると軽くできます。
 
+## 指定した地点の地面の高さを調べる（0.3.1）
+
+```javascript
+const map = document.getElementById("map");
+const x = Math.random() * 20 - 10;
+const z = Math.random() * 10 - 20;
+const y = getGroundHeight(map, x, z);
+
+if (y !== null) {
+  const controls = avatar.components.avatar.controls;
+  controls.player.setAttribute("position", { x: x, y: y, z: z });
+  controls.clearInput();
+}
+```
+
+`getGroundHeight(ground, x, z, maxSlope = 45)`は、指定した地形要素とその子の静的なメッシュを上から調べ、X/Zにある最上面の**ワールド座標のY**を返します。HTMLのposition・rotation・scale、親子の変換、walkableのautoAlignで補正済みの現在位置を反映します。地形やアバターの位置は変更しません。
+
+- X・Z・戻り値の単位はm。`maxSlope`は度で、既定値45、0以上90未満です。avatar側のmaxSlopeを変更した場合は、同じ値を第4引数へ渡します。
+- 範囲外、未読込、メッシュなし、非表示（親・子を含む）、walkableのenabledがfalse、不正な引数、最上面が上限を超える急斜面の場合は`null`です。急斜面の下に床があっても、その床へ潜る高さは返しません。
+- 高さ0も有効なので、`if (y)`ではなく`if (y !== null)`で確認します。GLB読込後に使い、autoAlignを使う場合は最初の高さ合わせが済んだゲーム中の座標を調べてください。
+- `walkable`の有無にかかわらず、指定した要素の形状を調べます。通常は歩行に使うwalkable付きの地形と同じ要素を渡します。変形するスキンメッシュは対象外です。
+- 屋根・水面・茂み・サボテンの意味は区別しません。solid、movement-area、アバターの半径、移動経路も判定しません。安全な着地点だけを選びたい場合は、床・坂だけの地形と、教材側で決めた範囲を使います。
+- 戻り値は地面そのものの高さです。avatarのgroundOffsetを0以外にしている場合は、その値をYへ足して使います。
+
+ランダムワープでは、演出を始める前にX・Z・Yを決めます。`y === null`なら今回は処理を始めず、次の判定で選び直します。モデルを沈める演出は、着地できる候補が見つかった後に始めます。
+
 ## 共有空間への接続
 
 `vr-shared.js`はブラウザ側だけの機能です。使用する際は、対応したNode.js・Socket.IOサーバーを別途用意します。このリポジトリだけで共有サーバーは起動できません。
@@ -362,8 +388,8 @@ field.setAttribute("width", 40);
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-kit.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.0/vr-shared.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.1/vr-shared.js"></script>
 ```
 
 ```javascript
@@ -392,7 +418,7 @@ const socket = vrConnect(playerAvatar, { room: "main" });
 
 ## バージョンと確認範囲
 
-ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.0`を確認できます。授業では`@v0.3.0`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
+ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.1`を確認できます。授業では`@v0.3.1`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
 
 別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこのリポジトリには含めません。solidでの停止、後退、回り込み、衝突中のWalk/IdleもChromeで確認しています。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
 

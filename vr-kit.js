@@ -1,8 +1,8 @@
-/* vr-kit 0.3.0：A-Frameの後に読み込む。 */
+/* vr-kit 0.3.1：A-Frameの後に読み込む。 */
 if (typeof AFRAME === 'undefined') {
   throw new Error('[vr-kit] A-Frameが見つかりません。aframe.min.jsをvr-kit.jsより先に読み込んでください。');
 }
-const VR_KIT_VERSION = '0.3.0';
+const VR_KIT_VERSION = '0.3.1';
 
 /* 2つのA-Frame要素の位置が、指定距離以内ならtrueを返す（単位：m）。 */
 function isNear(first, second, distance = 2) {
@@ -16,6 +16,57 @@ function isNear(first, second, distance = 2) {
   const secondPosition = second.object3D.getWorldPosition(new THREE.Vector3());
   const actualDistance = firstPosition.distanceTo(secondPosition);
   return Number.isFinite(actualDistance) && actualDistance <= distance;
+}
+
+/* 指定した地形のX/Zにある表面の高さ（ワールドY）。着地できる面がなければnull。 */
+function getGroundHeight(ground, x, z, maxSlope = 45) {
+  if (!ground?.isConnected || !ground.sceneEl || !ground.object3D?.isObject3D ||
+      !Number.isFinite(x) || !Number.isFinite(z) ||
+      !Number.isFinite(maxSlope) || maxSlope < 0 || maxSlope >= 90) return null;
+
+  function active(object) {
+    for (let parent = object; parent; parent = parent.parent) {
+      if (!parent.visible || parent.el?.components?.walkable?.data.enabled === false) return false;
+    }
+    return true;
+  }
+  if (!active(ground.object3D)) return null;
+  ground.object3D.updateWorldMatrix(true, true);
+
+  const meshes = [], bounds = new THREE.Box3(), meshBounds = new THREE.Box3();
+  ground.object3D.traverse(function collectGroundMesh(object) {
+    if (!object.isMesh || object.isSkinnedMesh || !object.geometry || !active(object)) return;
+    if (object.isInstancedMesh) {
+      object.computeBoundingBox();
+      if (object.boundingBox) bounds.union(meshBounds.copy(object.boundingBox).applyMatrix4(object.matrixWorld));
+    } else {
+      if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+      if (object.geometry.boundingBox) bounds.union(meshBounds.copy(object.geometry.boundingBox).applyMatrix4(object.matrixWorld));
+    }
+    meshes.push(object);
+  });
+  if (!meshes.length || bounds.isEmpty() ||
+      !Number.isFinite(bounds.min.y) || !Number.isFinite(bounds.max.y)) return null;
+
+  // モデル全体より上から調べるので、地形ごとに開始高度を手で指定する必要はない。
+  const margin = Math.max(0.01, (bounds.max.y - bounds.min.y) * 0.000001);
+  const ray = new THREE.Raycaster(
+    new THREE.Vector3(x, bounds.max.y + margin, z),
+    new THREE.Vector3(0, -1, 0), 0, bounds.max.y - bounds.min.y + margin * 2
+  );
+  const hit = ray.intersectObjects(meshes, false)[0];
+  if (!hit?.face || !Number.isFinite(hit.point.y)) return null;
+
+  const matrix = hit.object.matrixWorld.clone();
+  if (hit.object.isInstancedMesh) {
+    const instanceMatrix = new THREE.Matrix4();
+    hit.object.getMatrixAt(hit.instanceId, instanceMatrix);
+    matrix.multiply(instanceMatrix);
+  }
+  const normal = hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(matrix));
+  // 最上面が急斜面なら、その下の床へ潜り込む候補を返さない。
+  if (normal.y + 1e-7 < Math.cos(THREE.MathUtils.degToRad(maxSlope))) return null;
+  return hit.point.y;
 }
 
 /* 操作中のavatarが、実際に移動しているか。呼び出しは記録を変更しない。 */
