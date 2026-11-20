@@ -1,8 +1,8 @@
-/* vr-kit 0.3.2：A-Frameの後に読み込む。 */
+/* vr-kit 0.3.3：A-Frameの後に読み込む。 */
 if (typeof AFRAME === 'undefined') {
   throw new Error('[vr-kit] A-Frameが見つかりません。aframe.min.jsをvr-kit.jsより先に読み込んでください。');
 }
-const VR_KIT_VERSION = '0.3.2';
+const VR_KIT_VERSION = '0.3.3';
 
 /* 2つのA-Frame要素の位置が、指定距離以内ならtrueを返す（単位：m）。 */
 function isNear(first, second, distance = 2) {
@@ -617,6 +617,83 @@ AFRAME.registerComponent('walkable', {
   remove: function remove() { this.surfaces.delete(this); }
 });
 
+/* NPCの原点を、指定した地形の高さに合わせる。Yの手書きと読込待ちは不要。 */
+AFRAME.registerComponent('ground', {
+  // 文字列で保持するので、地形要素を後から追加した場合も見つけられる。
+  schema: { type: 'string', default: '' },
+  after: ['vr-solid-controls'],
+  init: function init() {
+    this.point = new THREE.Vector3();
+    this.revision = 0;
+    this.invalidate = () => { this.revision++; };
+    this.modelChanged = () => { this.restoreMesh(); this.hideMesh(); this.invalidate(); };
+    this.el.addEventListener('object3dset', this.modelChanged);
+    this.hideMesh();
+  },
+  update: function update() { this.key = null; },
+  hideMesh: function hideMesh() {
+    this.ready = false;
+    const mesh = this.el.getObject3D('mesh');
+    if (!mesh || this.hiddenMesh === mesh) return;
+    this.hiddenMesh = mesh;
+    this.meshVisible = mesh.visible;
+    mesh.visible = false;
+  },
+  restoreMesh: function restoreMesh() {
+    if (this.hiddenMesh) this.hiddenMesh.visible = this.meshVisible;
+    this.hiddenMesh = null;
+  },
+  setSurface: function setSurface(surface) {
+    for (const event of ['object3dset', 'object3dremove', 'model-loaded', 'componentchanged']) {
+      this.surface?.removeEventListener(event, this.invalidate, true);
+      surface?.addEventListener(event, this.invalidate, true);
+    }
+    this.surface = surface;
+    this.key = null;
+  },
+  tick: function tick(time = performance.now()) {
+    const scene = this.el.sceneEl;
+    // 操作キャラには既存のwalkable処理がある。モデルだけを動かしてリグとずらさない。
+    if (this.el.hasAttribute('avatar')) { this.restoreMesh(); this.ready = true; return; }
+    let surface = null;
+    try { if (this.data) surface = scene.querySelector(this.data); } catch (_) { /* 無効な指定も待機扱い。 */ }
+    if (surface !== this.surface) this.setSurface(surface);
+    if (!surface?.isConnected || !surface.object3D || surface === this.el ||
+        surface.contains(this.el) || this.el.contains(surface)) {
+      this.hideMesh(); return;
+    }
+    // avatarの初期化前には配置しない。tickの順序でwalkableの高さ合わせを先に済ませる。
+    const avatar = scene.querySelector('[avatar]');
+    if (avatar && !avatar.components.avatar?.controls) {
+      this.hideMesh(); return;
+    }
+    surface.object3D.updateWorldMatrix(true, false);
+    this.el.object3D.getWorldPosition(this.point);
+    const keyFor = () => this.revision + '|' + surface.object3D.matrixWorld.elements.join(',') +
+      '|' + [this.point.x, this.point.y, this.point.z].map(value => value.toPrecision(12)).join(',');
+    const key = keyFor();
+    // visibleなど通知されない変更も拾う。静止中の全メッシュ判定は毎フレーム行わない。
+    if (key === this.key && time - this.checkedAt < 250) return;
+    this.checkedAt = time;
+    const y = getGroundHeight(surface, this.point.x, this.point.z);
+    if (y === null) { this.key = key; this.hideMesh(); return; }
+    this.point.y = y;
+    const worldPoint = this.point.clone();
+    if (this.el.object3D.parent) this.el.object3D.parent.worldToLocal(this.point);
+    this.el.setAttribute('position', { x: this.point.x, y: this.point.y, z: this.point.z });
+    this.point.copy(worldPoint);
+    this.key = keyFor();
+    // elementのvisibleは変更しない。取得済み・作者が非表示にしたモデルは再表示しない。
+    this.restoreMesh();
+    this.ready = true;
+  },
+  remove: function remove() {
+    this.setSurface(null);
+    this.el.removeEventListener('object3dset', this.modelChanged);
+    this.restoreMesh();
+  }
+});
+
 /* 足元近くの面だけを探す。重力・ジャンプ・足ごとのIKは行わない。 */
 AFRAME.registerComponent('vr-ground-controls', {
   schema: {
@@ -901,6 +978,8 @@ AFRAME.registerComponent('vr-solid-controls', {
     const items = vrSolidItems.get(this.el.sceneEl);
     for (const item of items || []) {
       if (!item.data.enabled || !item.el.isConnected) continue;
+      // 接地待ちで非表示のNPCが、見えない障害物になるのを防ぐ。
+      if (item.el.components.ground?.ready === false) continue;
       const object = item.el.object3D;
       let visible = true, own = false;
       for (let parent = object; parent; parent = parent.parent) {

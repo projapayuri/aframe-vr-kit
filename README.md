@@ -1,8 +1,8 @@
 # A-Frame VR Kit
 
-Author: **projapa** · Version: **0.3.2**
+Author: **projapa** · Version: **0.3.3**
 
-v0.3.2をGitHubとjsDelivrで公開しています。公開済みのv0.3.1・v0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
+v0.3.3をGitHubとjsDelivrで公開しています。公開済みのv0.3.2・v0.3.1・v0.3.0・v0.2.0も引き続き使えます。授業では下記のバージョン固定URLを使ってください。
 
 A-FrameでGLBアバターの操作・視点・アニメーション・距離判定・すり抜け防止を扱うJavaScriptライブラリです。必要な段階で共有空間への接続を追加できます。A-Frame Gesture Handsとは独立しています。
 
@@ -26,7 +26,7 @@ A-Frameを先に読み込み、その後にvr-kit.jsを読み込みます。
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.3/vr-kit.js"></script>
 ```
 
 一人で使う場合は`vr-kit.js`だけで動きます。共有するときは、下記「共有空間への接続」の順序で`vr-shared.js`も読み込みます。
@@ -37,7 +37,7 @@ A-Frame 1.6.0を先に読み込みます。以下は、ライブラリをCDNか�
 
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.3/vr-kit.js"></script>
 
 <a-scene>
   <a-sky color="lightblue"></a-sky>
@@ -353,6 +353,27 @@ field.setAttribute("width", 40);
 - 地面・親・子のvisible、walkableのenabled、属性の削除、モデルの読み込み後のメッシュ、親の位置・回転・scaleを反映します。`walkable="enabled: false"`で一時的に対象から外せます。対象を全て外すと高さ補正と地形の端での停止を解除します。
 - 対象は`avatar`で操作する自分です。NPC・通信相手を地形へ追従させません。変形するスキンメッシュや移動する足場に乗せる用途は対象外です。重いモデルでは床・坂だけの簡単な判定用モデルを用意すると軽くできます。
 
+## NPCを地面の高さに合わせる（0.3.3）
+
+```html
+<a-entity id="map" gltf-model="assets/sabaku.glb"
+  position="0 0 0" scale="0.1 0.1 0.1" walkable></a-entity>
+
+<a-entity gltf-model="assets/horse.glb"
+  position="-3 0 -7" scale="0.5 0.5 0.5"
+  ground="#map" avatar-motion="idle: Idle"></a-entity>
+```
+
+`ground="#map"`を付けたNPCだけ、X・Zにある地形の高さへ原点のYを合わせます。`position`のYは自動で上書きするので、授業では0で書きます。地形のGLB読み込みと、walkableによる開始時の高さ合わせをライブラリ側で待つため、配置用のJavaScriptは不要です。馬や宝箱など、原点が足元にあるモデル向けです。
+
+- `walkable`はプレイヤーが歩く地形の指定、`ground`は配置したNPCの高さ合わせです。walkableを付けても、ほかのGLBすべてを移動させることはありません。groundを付けないモデルは手書きのYを使います。
+- 地面として指定した要素の静的なメッシュを上から調べ、傾斜45度以内の最上面へ合わせます。範囲外・未読込・非表示・walkable無効などで面が見つからない間は、モデルの表示を待ちます。X/Zを地形内へ移すなど、条件が変わると再配置します。
+- X/Z・Yを後から変更した場合も地形のYへ合わせ直します。地形のposition・scaleなどの変更やモデルの再読み込みにも対応します。親子の変換はワールド座標で計算します。ボーンのアニメーションはそのまま再生できます。
+- 要素自身の`visible`は変更しません。取得後に`visible="false"`にしたアイテムを勝手に表示することはありません。groundを外すと、その時点の位置から通常の手動配置へ戻ります。
+- 原点がモデルの中心にある場合は、見た目の底面が埋まることがあります。その場合は外側の要素にgroundを付け、内側のモデルのYを足元に合わせてください。傾斜への体の回転・足ごとのIK・重力・経路探索は行いません。
+- 屋根・木・サボテンも形状として調べるので、その上に配置される場合があります。地面の意味を識別する機能ではありません。指定先にNPC自身を含めず、地形とNPCを別の要素として配置します。変形する地形や、子メッシュをthree.jsだけで直接動かす用途は対象外です。
+- 操作キャラの`avatar`には既存のwalkable処理があるため、groundは付けません。同じ要素に付けてもgroundを適用しません。空中に飾りたいモデルや、Y方向へ動かす演出にもgroundは付けません。
+
 ## 指定した地点の地面の高さを調べる（0.3.1）
 
 ```javascript
@@ -405,8 +426,8 @@ if (y === null) return;
 ```html
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-kit.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.2/vr-shared.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.3/vr-kit.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/projapayuri/aframe-vr-kit@v0.3.3/vr-shared.js"></script>
 ```
 
 ```javascript
@@ -435,7 +456,7 @@ const socket = vrConnect(playerAvatar, { room: "main" });
 
 ## バージョンと確認範囲
 
-ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.2`を確認できます。授業では`@v0.3.2`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
+ブラウザのConsoleで`VR_KIT_VERSION`を読むと`0.3.3`を確認できます。授業では`@v0.3.3`のように特定のリリースを指定したURLで読み込んでください。更新時は新しいバージョンを用意し、公開済みのタグは変更しません。
 
 別管理のローカル開発環境で、Chromeによる操作・モデル切り替え・距離判定・設定変更・リセット・一人用取得・共有を検証しています。テストコードや画像はこのリポジトリには含めません。solidでの停止、後退、回り込み、衝突中のWalk/IdleもChromeで確認しています。20接続シミュレーションは20台実機の検証とは別です。学校LAN・複数PC・VRヘッドセットは未確認です。
 
